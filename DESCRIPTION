@@ -1,0 +1,15 @@
+Package: biomass_yieldTablesWS3
+Title: LandR Yield Tables for WS3 Integration
+Version: 0.1.0
+Authors@R: person("Allen", "Larocque", role = c("aut", "cre"))
+Description: Generate and cache WS3-compatible m3/ha yield curves per LandR
+    development type, using inline LANDIS-II biomass growth equations and
+    Boudewyn biomass-to-volume conversion.
+License: GPL-3
+Encoding: UTF-8
+Imports:
+    data.table,
+    terra
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
