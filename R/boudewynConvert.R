@@ -44,8 +44,10 @@ lookupBoudewynKeys <- function(speciesCode, juris_id, ecozone = NULL) {
 
 # ── Boudewyn Table Loading ──────────────────────────────────────────────────
 
-loadBoudewynTable <- function(table_name) {
+loadBoudewynTable <- function(table_name, dir = NULL) {
   # table_name: "table3" or "table6_tb"
+  # dir: folder to look in first and to download into (the module passes inputPath(sim));
+  #   NULL keeps the old search relative to the working directory
   cached_key <- paste0(".boudewyn_", table_name)
   if (!is.null(.pkgEnv[[cached_key]])) return(.pkgEnv[[cached_key]])
 
@@ -59,16 +61,18 @@ loadBoudewynTable <- function(table_name) {
   fname <- paste0("boudewyn_", table_name, ".csv")
 
   # Search for pre-downloaded CSV in candidate locations (project root → TESTTHAT_WD root)
+  dlDir <- if (is.null(dir)) "inputs" else dir
   candidates <- c(
+    if (!is.null(dir)) file.path(dir, fname),
     file.path("inputs", fname),
     file.path(Sys.getenv("TESTTHAT_WD"), "inputs", fname)
   )
   localPath <- candidates[file.exists(candidates)][1]
 
   if (is.na(localPath) || !file.exists(localPath)) {
-    # Fall back: download to inputs/ relative to cwd
-    dir.create("inputs", showWarnings = FALSE, recursive = TRUE)
-    localPath <- file.path("inputs", fname)
+    # Fall back: download to dir (or inputs/ relative to cwd)
+    dir.create(dlDir, showWarnings = FALSE, recursive = TRUE)
+    localPath <- file.path(dlDir, fname)
     tryCatch(
       utils::download.file(url, localPath, quiet = TRUE),
       error = function(e) stop("Failed to download Boudewyn ", table_name,
@@ -83,27 +87,44 @@ loadBoudewynTable <- function(table_name) {
 
 # ── Biomass → Volume Conversion ─────────────────────────────────────────────
 
+# boudewynCoefficients(): the Table 6_tb and Table 3 coefficient rows boudewynBiomassToVol() uses
+# for one CanFI species, jurisdiction and ecozone. Also part of each cached curve's inputsKey, so
+# corrected coefficients rebuild the curves that used them.
+boudewynCoefficients <- function(canfi_species, juris_id, ecozone) {
+  # Column names in NFIS appendix2_table6_tb.csv:
+  #   juris_id, ecozone, canfi_spec, genus, species, variety,
+  #   a1, a2, a3, b1, b2, b3, c1, c2, c3, count
+  t6 <- loadBoudewynTable("table6_tb")
+  t6_row <- t6[t6$canfi_spec == canfi_species &
+               t6$juris_id   == juris_id      &
+               t6$ecozone    == ecozone, ]
+  if (nrow(t6_row) == 0) {
+    stop("No Boudewyn Table 6_tb params for canfi_species=", canfi_species,
+         ", juris_id=", juris_id, ", ecozone=", ecozone)
+  }
+  # Column names in NFIS appendix2_table3.csv:
+  #   juris_id, ecozone, canfi_species, genus, species, variety, a, b, volm, count, rmse
+  t3 <- loadBoudewynTable("table3")
+  t3_row <- t3[t3$canfi_species == canfi_species &
+               t3$juris_id      == juris_id       &
+               t3$ecozone       == ecozone, ]
+  if (nrow(t3_row) == 0) {
+    stop("No Boudewyn Table 3 params for canfi_species=", canfi_species,
+         ", juris_id=", juris_id, ", ecozone=", ecozone)
+  }
+  list(t6 = t6_row[1, c("a1", "a2", "a3", "b1", "b2", "b3", "c1", "c2", "c3")],
+       t3 = t3_row[1, c("a", "b")])
+}
+
 boudewynBiomassToVol <- function(ageB, canfi_species, juris_id, ecozone) {
   # Input:  ageB — data.frame(age, B_gm2)  where B_gm2 is total AGB in g/m²
   # Output: data.frame(age, vol_m3ha)
 
   B_tha <- ageB$B_gm2 / 100   # g/m² → tonnes/ha
+  coefs <- boudewynCoefficients(canfi_species, juris_id, ecozone)
 
   # ── Step 1: Table 6_tb — merchantable stemwood fraction (pstem) ──────────
-  # Column names in NFIS appendix2_table6_tb.csv:
-  #   juris_id, ecozone, canfi_spec, genus, species, variety,
-  #   a1, a2, a3, b1, b2, b3, c1, c2, c3, count
-  t6 <- loadBoudewynTable("table6_tb")
-
-  t6_row <- t6[t6$canfi_spec == canfi_species &
-               t6$juris_id   == juris_id      &
-               t6$ecozone    == ecozone, ]
-
-  if (nrow(t6_row) == 0) {
-    stop("No Boudewyn Table 6_tb params for canfi_species=", canfi_species,
-         ", juris_id=", juris_id, ", ecozone=", ecozone)
-  }
-  r <- t6_row[1, ]
+  r <- coefs$t6
 
   # Multinomial logistic model — proportion of total AGB that is merchantable stemwood
   lB5   <- log(B_tha + 5)
@@ -115,19 +136,7 @@ boudewynBiomassToVol <- function(ageB, canfi_species, juris_id, ecozone) {
   b_m   <- B_tha * pstem   # merchantable stemwood biomass (tonnes/ha)
 
   # ── Step 2: Inverse Table 3 — merchantable volume ───────────────────────
-  # Column names in NFIS appendix2_table3.csv:
-  #   juris_id, ecozone, canfi_species, genus, species, variety, a, b, volm, count, rmse
-  t3 <- loadBoudewynTable("table3")
-
-  t3_row <- t3[t3$canfi_species == canfi_species &
-               t3$juris_id      == juris_id       &
-               t3$ecozone       == ecozone, ]
-
-  if (nrow(t3_row) == 0) {
-    stop("No Boudewyn Table 3 params for canfi_species=", canfi_species,
-         ", juris_id=", juris_id, ", ecozone=", ecozone)
-  }
-  r3 <- t3_row[1, ]
+  r3 <- coefs$t3
 
   # Inverse power equation: vol = (b_m / a)^(1/b)
   # Guard against b_m <= 0 or a <= 0 (yields 0 volume)

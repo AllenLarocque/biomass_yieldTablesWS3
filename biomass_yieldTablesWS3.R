@@ -38,6 +38,10 @@ doEvent.biomass_yieldTablesWS3 <- function(sim, eventTime, eventType) {
       .sourceHelper("curveCache.R")
       .sourceHelper("boudewynConvert.R")
       .sourceHelper("simStand.R")
+      # Read the species -> Boudewyn lookup from this module's data/, and the Boudewyn tables from
+      # inputPath(sim), wherever R was started: cached curves' inputsKey needs both every period
+      loadSpeciesLookup(file.path(modulePath(sim), currentModule(sim), "data", "species_boudewyn_lookup.csv"))
+      for (tbl in c("table3", "table6_tb")) loadBoudewynTable(tbl, dir = inputPath(sim))
 
       cachePath <- file.path(outputPath(sim), "ws3YieldCurves.rds")
       sim$ws3YieldCurves <- loadCurveCache(cachePath)

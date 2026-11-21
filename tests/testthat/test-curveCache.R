@@ -65,15 +65,18 @@ test_that("saveCurveCache creates parent directories if needed", {
 
 # ── inputs-aware cache (curveInputsKey, staleDevTypes) ──────────────────────
 
-mock_boudKeys <- function() list(canfi_species = 101L, juris_id = "BC", ecozone = 4L)
+# A CanFI species / jurisdiction / ecozone present in both Boudewyn tables (black spruce, BC, ecozone 9)
+mock_boudKeys <- function() list(canfi_species = 101L, juris_id = "BC", ecozone = 9L)
 
 test_that("curveInputsKey is stable for identical inputs", {
+  skip_if_no_boudewyn()
   k1 <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
   k2 <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
   expect_identical(k1, k2)
 })
 
 test_that("curveInputsKey changes with every input that shapes the curve", {
+  skip_if_no_boudewyn()
   base <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
   sp <- mock_species(); sp[speciesCode == "Pice_mar", growthcurve := 0.717]
   expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", sp, mock_speciesEcoregion(), 300L, mock_boudKeys())))
@@ -91,6 +94,7 @@ test_that("curveInputsKey changes with every input that shapes the curve", {
 })
 
 test_that("curveInputsKey ignores other species and ecoregions", {
+  skip_if_no_boudewyn()
   base <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
   sp <- mock_species(); sp[speciesCode == "Pice_gla", growthcurve := 0.9]
   se <- mock_speciesEcoregion(); se[ecoregionGroup == "ECO_2", maxB := 1]
@@ -98,6 +102,7 @@ test_that("curveInputsKey ignores other species and ecoregions", {
 })
 
 test_that("curveInputsKey accepts factor codes and errors on a missing row", {
+  skip_if_no_boudewyn()
   sp <- mock_species()[, speciesCode := factor(speciesCode)]
   se <- mock_speciesEcoregion()[, `:=`(speciesCode = factor(speciesCode), ecoregionGroup = factor(ecoregionGroup))]
   expect_identical(curveInputsKey(factor("Pice_mar"), factor("ECO_1"), sp, se, 300L, mock_boudKeys()),
@@ -129,8 +134,49 @@ test_that("inputsKey survives the cache round-trip", {
 })
 
 test_that("curveInputsKey works on keyed tables like LandR's (column names shadow arguments)", {
+  skip_if_no_boudewyn()
   sp <- mock_species(); sp[, `:=`(species = speciesCode, speciesCode = factor(speciesCode))]; setkey(sp, speciesCode)
   se <- mock_speciesEcoregion(); se[, speciesCode := factor(speciesCode)]; setkey(se, speciesCode)
   k <- curveInputsKey("Pice_gla", "ECO_2", sp, se, 300L, mock_boudKeys())
-  expect_match(k, "growthcurve=0.25\\|mortalityshape=10\\|maxANPP=90\\|maxB=9000", fixed = FALSE)
+  expect_match(k, paste0("|growthcurve=", sprintf("%a", 0.25), "|mortalityshape=", sprintf("%a", 10),
+                         "|maxANPP=", sprintf("%a", 90), "|maxB=", sprintf("%a", 9000), "|"), fixed = TRUE)
+})
+
+test_that("curveInputsKey distinguishes nearby doubles and survives an RDS round-trip of its inputs", {
+  skip_if_no_boudewyn()
+  se <- mock_speciesEcoregion()
+  se2 <- copy(se)[speciesCode == "Pice_mar" & ecoregionGroup == "ECO_1", maxANPP := 100 + 1e-13]
+  k1 <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), se, 300L, mock_boudKeys())
+  expect_false(identical(k1, curveInputsKey("Pice_mar", "ECO_1", mock_species(), se2, 300L, mock_boudKeys())))
+  path <- tempfile(fileext = ".rds"); on.exit(unlink(path))
+  saveRDS(list(sp = mock_species(), se = se), path); rt <- readRDS(path)
+  expect_identical(k1, curveInputsKey("Pice_mar", "ECO_1", rt$sp, rt$se, 300L, mock_boudKeys()))
+})
+
+test_that("curveInputsKey changes when a Boudewyn coefficient changes but the identifiers do not", {
+  skip_if_no_boudewyn()
+  base <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
+  bk <- mock_boudKeys()
+  for (tbl in c("table3", "table6_tb")) {
+    orig <- loadBoudewynTable(tbl)
+    on.exit(.pkgEnv[[paste0(".boudewyn_", tbl)]] <- orig, add = TRUE)
+    edited <- orig
+    idCol <- if (tbl == "table3") "canfi_species" else "canfi_spec"
+    row <- which(edited[[idCol]] == bk$canfi_species & edited$juris_id == bk$juris_id &
+                   edited$ecozone == bk$ecozone)[1]
+    coefCol <- if (tbl == "table3") "a" else "b2"
+    edited[row, coefCol] <- edited[row, coefCol] * 1.01
+    .pkgEnv[[paste0(".boudewyn_", tbl)]] <- edited
+    expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(),
+                                                300L, bk)), info = tbl)
+    .pkgEnv[[paste0(".boudewyn_", tbl)]] <- orig
+  }
+})
+
+test_that("boudewynCoefficients returns the rows boudewynBiomassToVol uses", {
+  skip_if_no_boudewyn()
+  co <- boudewynCoefficients(101L, "BC", 9L)
+  expect_named(co$t6, c("a1", "a2", "a3", "b1", "b2", "b3", "c1", "c2", "c3"))
+  expect_named(co$t3, c("a", "b"))
+  expect_error(boudewynCoefficients(-1L, "BC", 9L), "Table 6_tb")
 })
