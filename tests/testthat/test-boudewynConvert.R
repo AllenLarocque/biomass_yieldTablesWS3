@@ -76,3 +76,22 @@ test_that("boudewynBiomassToVol volume increases monotonically with biomass", {
   )
   expect_true(all(diff(result$vol_m3ha) >= 0))
 })
+
+test_that("every species lookup row points at the matching Boudewyn species", {
+  skip_if_no_lookup()
+  lut <- loadSpeciesLookup()
+  t3  <- loadBoudewynTable("table3")
+  names(t3) <- trimws(names(t3))
+  t3Names <- unique(t3[, c("canfi_species", "genus", "species")])
+  for (i in seq_len(nrow(lut))) {
+    hit <- t3Names[t3Names$canfi_species == lut$canfi_species[i], ]
+    expect_gt(nrow(hit), 0L, label = lut$speciesCode[i])
+    ## LandR codes are Genu_spe; a merged group (e.g. Pice_eng_gla) may use any of its members.
+    ## One code can have several rows (e.g. 500 is both PSEU MEN and PSEU SPP): one must match
+    parts <- strsplit(toupper(lut$speciesCode[i]), "_")[[1]]
+    match <- startsWith(trimws(hit$genus), parts[1]) &
+      Reduce(`|`, lapply(parts[-1], function(sp) startsWith(trimws(hit$species), sp)))
+    expect_true(any(match),
+                info = paste(lut$speciesCode[i], "->", lut$canfi_species[i], hit$genus, hit$species))
+  }
+})
