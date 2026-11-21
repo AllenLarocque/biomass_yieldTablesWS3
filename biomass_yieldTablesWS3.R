@@ -38,6 +38,10 @@ doEvent.biomass_yieldTablesWS3 <- function(sim, eventTime, eventType) {
       .sourceHelper("curveCache.R")
       .sourceHelper("boudewynConvert.R")
       .sourceHelper("simStand.R")
+      # Read the species -> Boudewyn lookup from this module's data/, and the Boudewyn tables from
+      # inputPath(sim), wherever R was started: cached curves' inputsKey needs both every period
+      loadSpeciesLookup(file.path(modulePath(sim), currentModule(sim), "data", "species_boudewyn_lookup.csv"))
+      for (tbl in c("table3", "table6_tb")) loadBoudewynTable(tbl, dir = inputPath(sim))
 
       cachePath <- file.path(outputPath(sim), "ws3YieldCurves.rds")
       sim$ws3YieldCurves <- loadCurveCache(cachePath)
@@ -69,13 +73,22 @@ doEvent.biomass_yieldTablesWS3 <- function(sim, eventTime, eventType) {
   currentKeys <- devTypes[, devTypeTupleKey(speciesCode, site_quality, ecoregionGroup),
                            by = seq_len(nrow(devTypes))]$V1
 
-  # 4. Diff against cache
-  newKeys <- diffDevTypes(currentKeys, names(sim$ws3YieldCurves))
+  # 4. Diff against cache: rebuild curves that are missing or were built from other inputs
+  boudKeysBySpecies <- lapply(setNames(nm = unique(as.character(devTypes$speciesCode))),
+                              lookupBoudewynKeys, juris_id = "BC")
+  currentInputs <- vapply(seq_len(nrow(devTypes)), function(i) {
+    sp <- as.character(devTypes$speciesCode[i])
+    curveInputsKey(sp, devTypes$ecoregionGroup[i], sim$species, sim$speciesEcoregion,
+                   P(sim)$maxSimAge, boudKeysBySpecies[[sp]])
+  }, character(1))
+  newKeys <- staleDevTypes(currentKeys, currentInputs, sim$ws3YieldCurves)
   newDevTypes <- devTypes[currentKeys %in% newKeys]
 
   if (nrow(newDevTypes) > 0) {
+    nChanged <- sum(newKeys %in% names(sim$ws3YieldCurves))
     message("biomass_yieldTablesWS3: simulating yield curves for ",
-            nrow(newDevTypes), " new development type(s)")
+            nrow(newDevTypes), " development type(s)",
+            if (nChanged > 0) paste0(", ", nChanged, " of them cached from different inputs"))
 
     for (i in seq_len(nrow(newDevTypes))) {
       dt <- newDevTypes[i]
@@ -91,14 +104,15 @@ doEvent.biomass_yieldTablesWS3 <- function(sim, eventTime, eventType) {
         modulePath       = modulePath(sim)
       )
 
-      boudKeys <- lookupBoudewynKeys(dt$speciesCode, juris_id = "BC")
+      boudKeys <- boudKeysBySpecies[[as.character(dt$speciesCode)]]
       curve <- boudewynBiomassToVol(ageB,
         canfi_species = boudKeys$canfi_species,
         juris_id      = boudKeys$juris_id,
         ecozone       = boudKeys$ecozone
       )
       curve$B_gm2 <- ageB$B_gm2[match(curve$age, ageB$age)]
-      sim$ws3YieldCurves[[key]] <- curve   # data.frame(age, vol_m3ha, B_gm2)
+      attr(curve, "inputsKey") <- currentInputs[match(key, currentKeys)]
+      sim$ws3YieldCurves[[key]] <- curve   # data.frame(age, vol_m3ha, B_gm2), attr inputsKey
     }
 
     cachePath <- file.path(outputPath(sim), "ws3YieldCurves.rds")
