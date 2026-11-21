@@ -47,7 +47,7 @@ lookupBoudewynKeys <- function(speciesCode, juris_id, ecozone = NULL) {
 loadBoudewynTable <- function(table_name, dir = NULL) {
   # table_name: "table3" or "table6_tb"
   # dir: folder to look in first and to download into (the module passes inputPath(sim));
-  #   NULL keeps the old search relative to the working directory
+  #   NULL keeps the old search relative to the working directory and TESTTHAT_WD
   cached_key <- paste0(".boudewyn_", table_name)
   if (!is.null(.pkgEnv[[cached_key]])) return(.pkgEnv[[cached_key]])
 
@@ -61,9 +61,10 @@ loadBoudewynTable <- function(table_name, dir = NULL) {
   fname <- paste0("boudewyn_", table_name, ".csv")
 
   # Search for pre-downloaded CSV in candidate locations (project root → TESTTHAT_WD root)
+  # An explicit dir is the only place looked in, so the working directory cannot mix in another
+  # project's tables
   dlDir <- if (is.null(dir)) "inputs" else dir
-  candidates <- c(
-    if (!is.null(dir)) file.path(dir, fname),
+  candidates <- if (!is.null(dir)) file.path(dir, fname) else c(
     file.path("inputs", fname),
     file.path(Sys.getenv("TESTTHAT_WD"), "inputs", fname)
   )

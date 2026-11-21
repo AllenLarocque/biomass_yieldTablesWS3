@@ -157,20 +157,33 @@ test_that("curveInputsKey changes when a Boudewyn coefficient changes but the id
   skip_if_no_boudewyn()
   base <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
   bk <- mock_boudKeys()
-  for (tbl in c("table3", "table6_tb")) {
+  keyWithEditedTable <- function(tbl, idCol, coefCol) {
+    slot <- paste0(".boudewyn_", tbl)
     orig <- loadBoudewynTable(tbl)
-    on.exit(.pkgEnv[[paste0(".boudewyn_", tbl)]] <- orig, add = TRUE)
+    on.exit(.pkgEnv[[slot]] <- orig)   # restored even if the key throws
     edited <- orig
-    idCol <- if (tbl == "table3") "canfi_species" else "canfi_spec"
     row <- which(edited[[idCol]] == bk$canfi_species & edited$juris_id == bk$juris_id &
                    edited$ecozone == bk$ecozone)[1]
-    coefCol <- if (tbl == "table3") "a" else "b2"
     edited[row, coefCol] <- edited[row, coefCol] * 1.01
-    .pkgEnv[[paste0(".boudewyn_", tbl)]] <- edited
-    expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(),
-                                                300L, bk)), info = tbl)
-    .pkgEnv[[paste0(".boudewyn_", tbl)]] <- orig
+    .pkgEnv[[slot]] <- edited
+    curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, bk)
   }
+  expect_false(identical(base, keyWithEditedTable("table3", "canfi_species", "a")))
+  expect_false(identical(base, keyWithEditedTable("table6_tb", "canfi_spec", "b2")))
+  expect_identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, bk))
+})
+
+test_that("loadBoudewynTable with an explicit dir reads only from that dir", {
+  skip_if_no_boudewyn()
+  slot <- ".boudewyn_table3"
+  orig <- .pkgEnv[[slot]]
+  on.exit(.pkgEnv[[slot]] <- orig)
+  d <- tempfile(); dir.create(d); on.exit(unlink(d, recursive = TRUE), add = TRUE)
+  tbl <- utils::read.csv(file.path(Sys.getenv("TESTTHAT_WD"), "inputs", "boudewyn_table3.csv"))
+  tbl$a <- tbl$a * 2
+  utils::write.csv(tbl, file.path(d, "boudewyn_table3.csv"), row.names = FALSE)
+  .pkgEnv[[slot]] <- NULL
+  expect_equal(loadBoudewynTable("table3", dir = d)$a, tbl$a)
 })
 
 test_that("boudewynCoefficients returns the rows boudewynBiomassToVol uses", {
