@@ -62,3 +62,75 @@ test_that("saveCurveCache creates parent directories if needed", {
   expect_no_error(saveCurveCache(curves, path))
   expect_true(file.exists(path))
 })
+
+# ── inputs-aware cache (curveInputsKey, staleDevTypes) ──────────────────────
+
+mock_boudKeys <- function() list(canfi_species = 101L, juris_id = "BC", ecozone = 4L)
+
+test_that("curveInputsKey is stable for identical inputs", {
+  k1 <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
+  k2 <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
+  expect_identical(k1, k2)
+})
+
+test_that("curveInputsKey changes with every input that shapes the curve", {
+  base <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
+  sp <- mock_species(); sp[speciesCode == "Pice_mar", growthcurve := 0.717]
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", sp, mock_speciesEcoregion(), 300L, mock_boudKeys())))
+  sp <- mock_species(); sp[speciesCode == "Pice_mar", mortalityshape := 21]
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", sp, mock_speciesEcoregion(), 300L, mock_boudKeys())))
+  sp <- mock_species(); sp[speciesCode == "Pice_mar", longevity := 250L]
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", sp, mock_speciesEcoregion(), 300L, mock_boudKeys())))
+  se <- mock_speciesEcoregion(); se[speciesCode == "Pice_mar" & ecoregionGroup == "ECO_1", maxANPP := 600]
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), se, 300L, mock_boudKeys())))
+  se <- mock_speciesEcoregion(); se[speciesCode == "Pice_mar" & ecoregionGroup == "ECO_1", maxB := 10575]
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), se, 300L, mock_boudKeys())))
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 250L, mock_boudKeys())))
+  bk <- mock_boudKeys(); bk$canfi_species <- 104L
+  expect_false(identical(base, curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, bk)))
+})
+
+test_that("curveInputsKey ignores other species and ecoregions", {
+  base <- curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys())
+  sp <- mock_species(); sp[speciesCode == "Pice_gla", growthcurve := 0.9]
+  se <- mock_speciesEcoregion(); se[ecoregionGroup == "ECO_2", maxB := 1]
+  expect_identical(base, curveInputsKey("Pice_mar", "ECO_1", sp, se, 300L, mock_boudKeys()))
+})
+
+test_that("curveInputsKey accepts factor codes and errors on a missing row", {
+  sp <- mock_species()[, speciesCode := factor(speciesCode)]
+  se <- mock_speciesEcoregion()[, `:=`(speciesCode = factor(speciesCode), ecoregionGroup = factor(ecoregionGroup))]
+  expect_identical(curveInputsKey(factor("Pice_mar"), factor("ECO_1"), sp, se, 300L, mock_boudKeys()),
+                   curveInputsKey("Pice_mar", "ECO_1", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys()))
+  expect_error(curveInputsKey("Pice_mar", "ECO_9", mock_species(), mock_speciesEcoregion(), 300L, mock_boudKeys()))
+})
+
+test_that("staleDevTypes returns missing keys, keys with changed inputs and keys cached without inputsKey", {
+  curve <- function(ik) { d <- data.frame(age = 0:1, vol_m3ha = 0:1); attr(d, "inputsKey") <- ik; d }
+  cache <- list("A|low|E1" = curve("a1"), "B|med|E1" = curve("b1"),
+                "C|high|E1" = data.frame(age = 0:1, vol_m3ha = 0:1))   # cached before inputsKey existed
+  stale <- staleDevTypes(c("A|low|E1", "B|med|E1", "C|high|E1", "D|low|E1"),
+                         c("a1",       "b2",       "c1",        "d1"), cache)
+  expect_setequal(stale, c("B|med|E1", "C|high|E1", "D|low|E1"))
+})
+
+test_that("staleDevTypes returns nothing when every curve matches its inputs", {
+  curve <- function(ik) { d <- data.frame(age = 0:1, vol_m3ha = 0:1); attr(d, "inputsKey") <- ik; d }
+  cache <- list("A|low|E1" = curve("a1"))
+  expect_length(staleDevTypes("A|low|E1", "a1", cache), 0L)
+  expect_error(staleDevTypes(c("A|low|E1", "B|low|E1"), "a1", cache))
+})
+
+test_that("inputsKey survives the cache round-trip", {
+  d <- data.frame(age = 0:1, vol_m3ha = 0:1); attr(d, "inputsKey") <- "v1|x"
+  path <- tempfile(fileext = ".rds"); on.exit(unlink(path))
+  saveCurveCache(list("A|low|E1" = d), path)
+  expect_identical(attr(loadCurveCache(path)[["A|low|E1"]], "inputsKey"), "v1|x")
+})
+
+test_that("curveInputsKey works on keyed tables like LandR's (column names shadow arguments)", {
+  sp <- mock_species(); sp[, `:=`(species = speciesCode, speciesCode = factor(speciesCode))]; setkey(sp, speciesCode)
+  se <- mock_speciesEcoregion(); se[, speciesCode := factor(speciesCode)]; setkey(se, speciesCode)
+  k <- curveInputsKey("Pice_gla", "ECO_2", sp, se, 300L, mock_boudKeys())
+  expect_match(k, "growthcurve=0.25\\|mortalityshape=10\\|maxANPP=90\\|maxB=9000", fixed = FALSE)
+})
