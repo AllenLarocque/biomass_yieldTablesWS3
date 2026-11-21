@@ -95,3 +95,10 @@ test_that("every species lookup row points at the matching Boudewyn species", {
                 info = paste(lut$speciesCode[i], "->", lut$canfi_species[i], hit$genus, hit$species))
   }
 })
+
+test_that("LandR's merged BC spruce group Pice_eng_gla has a lookup entry", {
+  skip_if_no_lookup()
+  ## LandR's default BC species list merges Engelmann and white spruce into Pice_eng_gla.
+  ## Boudewyn has no hybrid code; white spruce (105) is used
+  expect_identical(lookupBoudewynKeys("Pice_eng_gla", juris_id = "BC")$canfi_species, 105L)
+})
